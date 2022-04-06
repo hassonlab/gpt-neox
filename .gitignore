@@ -1,3 +1,6 @@
+# Checkpoints for 20B model
+20B_checkpoints/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
