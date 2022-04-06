@@ -101,18 +101,18 @@ def generate_embeddings(
                         torch.arange(batch_size), token_generation_start_index - 1, :
                     ]
 
-            # Get top word
-            top_token = torch.argmax(context_logits, dim=-1).view(-1)
-            top_token = top_token.cpu().numpy().tolist()
+            # Get top token
+            top_token_id = torch.argmax(context_logits, dim=-1).view(-1)
+            top_token_id = top_token_id.cpu().numpy().tolist()
 
             try:
-                top_word = neox_args.tokenizer.detokenize(top_token)
+                top_token_text = [neox_args.tokenizer.detokenize([t]) for t in top_token_id]
                 message = "Success"
             except KeyError:
                 top_word = None
                 message = "WARNING: generated token which doesn't exist."
 
-    return context_logits, top_token, top_word, message
+    return context_logits, top_token_id, top_token_text, message
 
 
 def generate_embeddings_from_prompt(
@@ -147,7 +147,7 @@ def generate_embeddings_from_prompt(
     input_count = len(text)
     input_pos = 0
 
-    inference_batch_size = 1
+    inference_batch_size = 2
     print_rank_0(f"Using inference batch size of {inference_batch_size}")
 
     # generate completions
@@ -200,7 +200,7 @@ def generate_embeddings_from_prompt(
         if terminate_runs == 1:
             return generated_texts
 
-        logits, top_tokens, top_words, message = generate_embeddings(
+        logits, top_tokens, top_tokens_text, message = generate_embeddings(
             neox_args=neox_args,
             model=model,
             context_tokens=context_tokens,
@@ -209,11 +209,11 @@ def generate_embeddings_from_prompt(
         logits = logits.cpu().numpy()
 
         if is_mp_rank_0():
-            for raw_text, logit_vec, top_token, top_word in zip(raw_texts, logits, top_tokens, top_words):
+            for raw_text, logit_vec, top_token, top_token_text in zip(raw_texts, logits, top_tokens, top_tokens_text):
                 data = {
                     "context": raw_text,
-                    "top_word": top_word,
-                    "top_token": top_token,
+                    "top_token_text": top_token_text,
+                    "top_token_id": top_token,
                     "logits": logit_vec,
                     "message": message,
                     "duration_seconds": float(time.time() - start_time),
