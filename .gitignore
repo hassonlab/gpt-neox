@@ -153,3 +153,6 @@ test_logs/
 logs/
 tensorboard/
 src/
+
+# PyCharm Project
+.idea

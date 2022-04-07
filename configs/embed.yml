@@ -6,5 +6,5 @@
 
   # input/output file
   "sample-input-file": "quotes_medium.jsonl",
-  "sample-output-file": "sample_embeddings.npy",
+  "sample-output-file": "quotes_embeddings.pickle",
 }

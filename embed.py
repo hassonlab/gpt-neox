@@ -24,13 +24,19 @@ import os
 import time
 from typing import List, Union
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 
 from megatron import print_rank_0
 from megatron import mpu
 from megatron.utils import is_mp_rank_0, setup_for_inference_or_eval
-from megatron.text_generation_utils import forward_model, pad_batch, broadcast_terminate_signal, get_batch
+from megatron.text_generation_utils import (
+    forward_model,
+    pad_batch,
+    broadcast_terminate_signal,
+    get_batch,
+)
 
 
 def generate_embeddings(
@@ -49,7 +55,10 @@ def generate_embeddings(
 
     Returns:
         A tuple containting:
-            - logits: a tensor of shape (batch_size, VOCAB_SIZE) representing the logits for each context
+            - context_logits: a tensor of shape (batch_size, VOCAB_SIZE) representing the logits for each context
+            - top_token_id: the id of the top predicted next token
+            - top_token_text: the text of the next predicted top token
+            - message: a status message, "Success" if things wen well.
 
     """
 
@@ -98,15 +107,17 @@ def generate_embeddings(
 
             # Get the logits for each context.
             context_logits = logits[
-                        torch.arange(batch_size), token_generation_start_index - 1, :
-                    ]
+                torch.arange(batch_size), token_generation_start_index - 1, :
+            ]
 
             # Get top token
             top_token_id = torch.argmax(context_logits, dim=-1).view(-1)
             top_token_id = top_token_id.cpu().numpy().tolist()
 
             try:
-                top_token_text = [neox_args.tokenizer.detokenize([t]) for t in top_token_id]
+                top_token_text = [
+                    neox_args.tokenizer.detokenize([t]) for t in top_token_id
+                ]
                 message = "Success"
             except KeyError:
                 top_word = None
@@ -119,7 +130,7 @@ def generate_embeddings_from_prompt(
     neox_args,
     model,
     text: Union[List[str], str],
-    ) -> list[dict]:
+) -> list[dict]:
     """
     Generates contextual embeddings from raw text and returns them in a dictionary.
 
@@ -153,7 +164,6 @@ def generate_embeddings_from_prompt(
     # generate completions
     generated_texts = []
     while True:
-        print_rank_0(f"Text {input_pos} of {len(text)}")
         model.module.clear_cache()  # clear kv cache between batches
 
         start_time = time.time()
@@ -209,20 +219,34 @@ def generate_embeddings_from_prompt(
 
         logits = logits.cpu().numpy()
 
+        # Only generate output on rank 0
         if is_mp_rank_0():
-            for raw_text, logit_vec, top_token, top_token_text in zip(raw_texts, logits, top_tokens, top_tokens_text):
+
+            # Extract the hidden states for each layer
+            for key, val in model.layer_outputs.items():
+                # Get the batch hidden of hidden states from this layer. Remember we need to un-pad things
+                hidden_states_batch = [
+                    val[0][0: context_lengths[b], b, :].numpy()
+                    for b in range(inference_batch_size)
+                ]
+
+            for raw_text, logit_vec, hidden_states, top_token, top_token_text in zip(
+                raw_texts, logits, hidden_states_batch, top_tokens, top_tokens_text
+            ):
                 data = {
                     "context": raw_text,
                     "top_token_text": top_token_text,
                     "top_token_id": top_token,
                     "logits": logit_vec,
+                    "hidden_states": hidden_states,
                     "message": message,
                     "duration_seconds": float(time.time() - start_time),
                 }
                 generated_texts.append(data)
 
-    return generated_texts
+                print_rank_0(f"Text {input_pos} of {len(text)}, inference_time = {data['duration_seconds']} seconds")
 
+    return generated_texts
 
 
 def generate_embeddings_input_from_file(
@@ -260,7 +284,8 @@ def generate_embeddings_input_from_file(
     # If the prompts are stored as JSONL, extract the text.
     if input_file.endswith(".jsonl"):
         import json
-        prompts = [json.loads(p)['text'] for p in prompts]
+
+        prompts = [json.loads(p)["text"] for p in prompts]
     else:
         prompts = [p.strip() for p in prompts]
 
@@ -271,7 +296,7 @@ def generate_embeddings_input_from_file(
 
     if is_mp_rank_0():
         if output_file is None:
-            output_file = str(input_file) + ".output.npy"
+            output_file = str(input_file) + ".output.pickle"
             print_rank_0(
                 "generate_embeddings_input_from_file() setting default output file to {}".format(
                     output_file
@@ -286,8 +311,12 @@ def generate_embeddings_input_from_file(
     )
 
     if is_mp_rank_0():
-        import json
-        print(json.dumps([{k: v for k,v in e.items() if k != 'logits'} for e in embeddings], indent=4))
+        print(
+            json.dumps(
+                [{k: v for k, v in e.items() if k not in ['logits', 'hidden_states']} for e in embeddings],
+                indent=4,
+            )
+        )
 
     print_rank_0("generate_samples_input_from_file() done")
     return embeddings
@@ -298,6 +327,13 @@ def main():
     Extract contextual embeddings from text/sample model
     """
     model, neox_args = setup_for_inference_or_eval(use_cache=True)
+
+    # Register hooks on all the layers to get the hidden states back
+    model.register_forward_hook(
+        layers_to_hook=list(range(2, 46)),
+        layer_name_pattern="ParallelTransformerLayerPipe",
+    )
+
     if neox_args.recompute:
         model.module.inference_mode(
             use_cache=False
@@ -307,12 +343,18 @@ def main():
         f"Generating contextual embeddings for samples from input file {neox_args.sample_input_file}"
     )
     assert neox_args.sample_input_file is not None
-    generate_embeddings_input_from_file(
+    results = generate_embeddings_input_from_file(
         neox_args=neox_args,
         model=model,
         input_file=neox_args.sample_input_file,
         output_file=neox_args.sample_output_file,
     )
+
+    if is_mp_rank_0():
+        print(f"Saving results to {neox_args.sample_output_file}")
+        import pickle
+        with open(neox_args.sample_output_file, 'wb') as f:
+            pickle.dump(results, f, protocol=pickle.HIGHEST_PROTOCOL)
 
 
 if __name__ == "__main__":
