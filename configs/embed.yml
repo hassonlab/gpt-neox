@@ -5,6 +5,6 @@
   "recompute": true,
 
   # input/output file
-  "sample-input-file": "sample_input.txt",
+  "sample-input-file": "quotes_medium.jsonl",
   "sample-output-file": "sample_embeddings.npy",
 }

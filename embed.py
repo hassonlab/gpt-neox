@@ -147,12 +147,13 @@ def generate_embeddings_from_prompt(
     input_count = len(text)
     input_pos = 0
 
-    inference_batch_size = 2
+    inference_batch_size = 1
     print_rank_0(f"Using inference batch size of {inference_batch_size}")
 
     # generate completions
     generated_texts = []
     while True:
+        print_rank_0(f"Text {input_pos} of {len(text)}")
         model.module.clear_cache()  # clear kv cache between batches
 
         start_time = time.time()
