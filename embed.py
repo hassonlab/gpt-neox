@@ -191,7 +191,7 @@ def generate_embeddings_from_prompt(
                 else:
                     context_tokens.append(neox_args.tokenizer.tokenize(raw_text))
 
-                context_length = len(context_tokens)
+                context_length = len(context_tokens[-1])
 
                 if context_length >= (neox_args.seq_length // 2):
                     print_rank_0(
@@ -204,7 +204,7 @@ def generate_embeddings_from_prompt(
 
         if not is_mp_rank_0():
             context_tokens = [neox_args.tokenizer.tokenize("EMPTY TEXT")]
-            context_length = [len(context_tokens)]
+            context_length = [len(context_tokens[0])]
             terminate_runs = 0
 
         terminate_runs = broadcast_terminate_signal(terminate_runs)
@@ -223,12 +223,12 @@ def generate_embeddings_from_prompt(
         if is_mp_rank_0():
 
             # Extract the hidden states for each layer
-            for key, val in model.layer_outputs.items():
-                # Get the batch hidden of hidden states from this layer. Remember we need to un-pad things
-                hidden_states_batch = [
-                    val[0][0: context_lengths[b], b, :].numpy()
-                    for b in range(inference_batch_size)
-                ]
+            layer_outputs = [val[0].numpy() for key, val in model.layer_outputs.items()]
+
+            hidden_states_batch = []
+            for b in range(inference_batch_size):
+                # Get the batch of hidden states from this layer. Remember we need to un-pad things
+                hidden_states_batch.append(np.stack([o[0:context_lengths[b], b, :] for o in layer_outputs]))
 
             for raw_text, logit_vec, hidden_states, top_token, top_token_text in zip(
                 raw_texts, logits, hidden_states_batch, top_tokens, top_tokens_text
