@@ -3,7 +3,7 @@
 
 This is a fork of GPT-NeoX with some minor modifications for running on Princeton's della-gpu cluster. It also supports a new inference mode for extracting logits and embeddings from the model. 
 
-To install on della-gpu first clone the embded branch from this repo:
+To install on della-gpu, first clone the embded branch from this repo:
 
 ```bash
 git clone -b embed https://github.com/hassonlab/gpt-neox.git
@@ -42,7 +42,7 @@ file names in the [configs/embded.yml](configs/embed.yml) configuration script.
 
 To run the job via SLURM, submit via SBATCH:
 
-```
+```bash
 sbatch run_embed.sh
 ```
 
