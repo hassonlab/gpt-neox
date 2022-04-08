@@ -1,6 +1,64 @@
 [![GitHub issues](https://img.shields.io/github/issues/EleutherAI/gpt-neox)](https://github.com/EleutherAI/gpt-neox/issues)
 [<img src="https://raw.githubusercontent.com/wandb/assets/main/wandb-github-badge-28.svg" alt="Weights & Biases monitoring" height=20>](https://wandb.ai/eleutherai/neox)
 
+This is a fork of GPT-NeoX with some minor modifications for running on Princeton's della-gpu cluster. It also supports a new inference mode for extracting logits and embeddings from the model. 
+
+To install on della-gpu first clone the embded branch from this repo:
+
+```bash
+git clone -b embed https://github.com/hassonlab/gpt-neox.git
+```
+
+Download the slim weights for the 20B model onto the `/scratch/gpfs/` filesytem.
+
+```bash
+wget --cut-dirs=5 -nH -r --no-parent --reject "index.html*" https://mystic.the-eye.eu/public/AI/models/GPT-NeoX-20B/slim_weights/ -P /scratch/gpfs/<YourUserName>/20B_checkpoints
+```
+
+Modify `configs/20B_della.yml` and set the parameters `vocab-file`, `save`, and `load` like so:
+
+```yaml
+  # Tokenizer /  checkpoint settings - you will need to change these to the location you have them saved in
+  "vocab-file": "/scratch/gpfs/<YourUserName>/20B_checkpoints/20B_tokenizer.json",
+  "save": "/scratch/gpfs/<YourUserName>/20B_checkpoints",
+  "load": "/scratch/gpfs/<YourUserName>/20B_checkpoints",
+```
+
+Create the appropriate conda environment: 
+
+```bash
+module load anaconda3/2021.11 cudatoolkit/11.3
+conda create -n gpt-neox python=3.9 -y
+conda activate gpt-neox
+pip install -r requirements/requirements.txt
+python ./megatron/fused_kernels/setup.py install # optional if not using fused kernels
+```
+
+If you wish to run the model on a dataset of string contexts and generate embeddings. Format your examples as either a simple text file
+where each line is string to encode, or use a JSONL formatted file where each JSON entry has atleast a key called `text`. See 
+[quotes_small.jsonl](quotes_small.jsonl) for an example. JSONL is better if your strings may have newlines in them because they will 
+be stripped when loading the simple text file. The filename must end in `.jsonl` to use JSONL format. Specify your input and output 
+file names in the [configs/embded.yml](configs/embed.yml) configuration script.
+
+To run the job via SLURM, submit via SBATCH:
+
+```
+sbatch run_embed.sh
+```
+
+Modify the SBATCH requirments depending on your needs. Per example inference speed using a single della node with two A100s is roughly 
+0.5 seconds, so request an appropriate walltime for the size of your dataset. Slurm logs are dumped into `slurm_logs` directory. 
+
+The results will be stored as a pickle file containing a list of dictionaries with the following entries:
+
+- `context`: the original context string passed the model
+- `top_token_text`: the most probable next token, in text form.
+- `top_token`: the most probable next token, in id form.
+- `logits`: the full output logits from the model
+- `hidden_states`: a tensore of shape `[num_layers, context_length, hidden_size]` representing the outputs for each Transformer layer from the model. 
+- `message`: a status message indicated whether things went well or not, should say "Success"
+- `duration_seconds`: Time it took to execute inference for this example.
+
 # GPT-NeoX
 
 This repository records [EleutherAI](https://www.eleuther.ai)'s work-in-progress for training large-scale language models on GPUs. Our current framework is based on NVIDIA's [Megatron Language Model](https://github.com/NVIDIA/Megatron-LM) and has been augmented with techniques from [DeepSpeed](https://www.deepspeed.ai) as well as some novel optimizations.

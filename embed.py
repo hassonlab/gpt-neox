@@ -40,9 +40,7 @@ from megatron.text_generation_utils import (
 
 
 def generate_embeddings(
-    neox_args,
-    model,
-    context_tokens: List[List[int]],
+    neox_args, model, context_tokens: List[List[int]],
 ):
     """
     Generate contextual embeddings from tokenzied texts.
@@ -127,9 +125,7 @@ def generate_embeddings(
 
 
 def generate_embeddings_from_prompt(
-    neox_args,
-    model,
-    text: Union[List[str], str],
+    neox_args, model, text: Union[List[str], str],
 ) -> list[dict]:
     """
     Generates contextual embeddings from raw text and returns them in a dictionary.
@@ -140,10 +136,14 @@ def generate_embeddings_from_prompt(
         text: either a single prompt (str) or a list of prompts (List[str]).
 
     Returns:
-        a list of dicts containing the following fields:
-            - 'context' (the input)
-            - 'logits' (the logits returned by the model for the context)
-            - 'embedding' (the contextual embdedding)
+        List[dict] -> a list of dicts containing the following fields:
+            - context: the original context string passed the model
+            - top_token_text: the most probable next token, in text form.
+            - top_token: the most probable next token, in id form.
+            - logits: the full output logits from the model
+            - hidden_states: a tensore of shape `[num_layers, context_length, hidden_size]` representing the outputs for each Transformer layer from the model.
+            - message: a status message indicated whether things went well or not, should say "Success"
+            - duration_seconds: Time it took to execute inference for this example.
 
     """
     eos_token_id = neox_args.tokenizer.eod
@@ -212,9 +212,7 @@ def generate_embeddings_from_prompt(
             return generated_texts
 
         logits, top_tokens, top_tokens_text, message = generate_embeddings(
-            neox_args=neox_args,
-            model=model,
-            context_tokens=context_tokens,
+            neox_args=neox_args, model=model, context_tokens=context_tokens,
         )
 
         logits = logits.cpu().numpy()
@@ -228,7 +226,9 @@ def generate_embeddings_from_prompt(
             hidden_states_batch = []
             for b in range(inference_batch_size):
                 # Get the batch of hidden states from this layer. Remember we need to un-pad things
-                hidden_states_batch.append(np.stack([o[0:context_lengths[b], b, :] for o in layer_outputs]))
+                hidden_states_batch.append(
+                    np.stack([o[0 : context_lengths[b], b, :] for o in layer_outputs])
+                )
 
             for raw_text, logit_vec, hidden_states, top_token, top_token_text in zip(
                 raw_texts, logits, hidden_states_batch, top_tokens, top_tokens_text
@@ -244,35 +244,37 @@ def generate_embeddings_from_prompt(
                 }
                 generated_texts.append(data)
 
-                print_rank_0(f"Text {input_pos} of {len(text)}, inference_time = {data['duration_seconds']} seconds")
+                print_rank_0(
+                    f"Text {input_pos} of {len(text)}, inference_time = {data['duration_seconds']} seconds"
+                )
 
     return generated_texts
 
 
 def generate_embeddings_input_from_file(
-    neox_args,
-    model,
-    input_file,
-    output_file=None,
+    neox_args, model, input_file, output_file=None,
 ):
     """
     Generates contextual emdeddings from an input file and writes them to an output file.
 
     Reads prompts from neox_args.sample_input_file and writes contextual embdeddings to neox_args.sample_output_file
 
-    neox_args: NeoXArgs.
-    model: a Megatron model
+    Args:
+        neox_args: NeoXArgs.
+        model: a Megatron model
+        input_file: path to input file. Each line in the input file will be treated as separate prompt. The line break at the end of the line is not included in the prompt.
+        output_file: file where generation results are to be stored in jsonl format. defaults to input_file+'.output.jsonl' if not defined
 
-    input_file: path to input file. Each line in the input file will be treated as separate prompt. The line break at the end of the line is not included in the prompt.
-    output_file: file where generation results are to be stored in jsonl format. defaults to input_file+'.output.jsonl' if not defined
+    Returns:
+        List[dict] -> a list of dicts containing the following fields:
+            - context: the original context string passed the model
+            - top_token_text: the most probable next token, in text form.
+            - top_token: the most probable next token, in id form.
+            - logits: the full output logits from the model
+            - hidden_states: a tensore of shape `[num_layers, context_length, hidden_size]` representing the outputs for each Transformer layer from the model.
+            - message: a status message indicated whether things went well or not, should say "Success"
+            - duration_seconds: Time it took to execute inference for this example.
 
-    returns: List[dict] -> a list of dicts containing the following fields:
-        - 'context' (the input)
-        - 'embedding' (the completion)
-        - 'length' (the length of the embedding in number of tokens)
-        - 'finished':
-        - 'message': a messaged associated with the generation procedure, can be a warning or error
-        - 'duration_seconds': duration of the generation in seconds
     """
     # Read the sample file
     print_rank_0(
@@ -305,18 +307,16 @@ def generate_embeddings_input_from_file(
 
     print_rank_0("generate_embeddings_input_from_file() generating...")
     embeddings = generate_embeddings_from_prompt(
-        neox_args=neox_args,
-        model=model,
-        text=prompts,
+        neox_args=neox_args, model=model, text=prompts,
     )
 
-    if is_mp_rank_0():
-        print(
-            json.dumps(
-                [{k: v for k, v in e.items() if k not in ['logits', 'hidden_states']} for e in embeddings],
-                indent=4,
-            )
-        )
+    #    if is_mp_rank_0():
+    #        print(
+    #            json.dumps(
+    #                [{k: v for k, v in e.items() if k not in ['logits', 'hidden_states']} for e in embeddings],
+    #                indent=4,
+    #            )
+    #        )
 
     print_rank_0("generate_samples_input_from_file() done")
     return embeddings
@@ -353,7 +353,8 @@ def main():
     if is_mp_rank_0():
         print(f"Saving results to {neox_args.sample_output_file}")
         import pickle
-        with open(neox_args.sample_output_file, 'wb') as f:
+
+        with open(neox_args.sample_output_file, "wb") as f:
             pickle.dump(results, f, protocol=pickle.HIGHEST_PROTOCOL)
 
 
