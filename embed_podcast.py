@@ -337,13 +337,13 @@ def generate_podcast_prediction(
     token_words = []
     token_ids = []
     # lower_token_ids = []
-    seq_length = 1024  #neox_args.seq_length, 1024, 512, 256, 128, 64, 32
+    seq_length = 128  #neox_args.seq_length, 1024, 512, 256, 128, 64, 32
 
-    file_name = 'test-podcast-neox20b-embeddings-'+str(seq_length)+'.csv'
+    file_name = 'podcast-neox20b-embeddings-'+str(seq_length)+'.pkl'
 
     # print_rank_0(f"Start Running for file: {file_name}")
 
-    with open('podcast-transcription-test.txt', 'r') as fp:
+    with open('podcast-transcription.txt', 'r') as fp:
         for line in fp:
             tokens = neox_args.tokenizer.tokenize(line.rstrip().lower())   # add .lower() to investigate
             token_ids.extend(tokens)
@@ -361,12 +361,12 @@ def generate_podcast_prediction(
     context_tokens = []
     embeddings = []
 
-    for i in range(1, 7):
-    # for i in range(1, len(token_ids)-1):
+    # for i in range(1, 7):
+    for i in range(1, len(token_ids)-1):
         print_rank_0(f"\n{i}")
 
         if token_words[i] in string.punctuation:
-            print_rank_0(f"token_words[i]: {token_words[i]}")
+            # print_rank_0(f"token_words[i]: {token_words[i]}")
             continue
         # length: neox_args.seq_length, 
         if is_mp_rank_0():
@@ -379,13 +379,14 @@ def generate_podcast_prediction(
             context_tokens = [neox_args.tokenizer.tokenize("EMPTY TEXT")]
 
         true_id = context_tokens[0][-1]
-        # print_rank_0(f"true_id: {true_id}")
+        # print_rank_0(f"context_tokens[0] length: {len(context_tokens[0])}")
         # pad batch in order to allow conversion to tensor
         context_tokens, context_lengths = pad_batch(
             copy.deepcopy(context_tokens),
             pad_id=neox_args.tokenizer.eod,
             pad_len=neox_args.seq_length,
         )
+        print_rank_0(f"print context_lengths: {context_lengths}")
 
         # convert to tensor and broadcast
         context_tokens = torch.cuda.LongTensor(context_tokens)
@@ -420,6 +421,7 @@ def generate_podcast_prediction(
 
             logits = forward_model(model, model_inputs, neox_args.is_pipe_parallel)
 
+            # print_rank_0(f"logits shape: {logits.shape}")
 
             if logits is not None:  # if pipe parallel, not all ranks return logits
 
@@ -428,19 +430,19 @@ def generate_podcast_prediction(
                     torch.arange(batch_size), token_generation_start_index - 2, :
                 ]
 
-                print_rank_0(f"batch_size: {batch_size}")
-                print_rank_0(f"context_logits shape: {context_logits.shape}")
-                print_rank_0(f"context_logits: {context_logits}")
+                # print_rank_0(f"batch_size: {batch_size}")
+                # print_rank_0(f"context_logits shape: {context_logits.shape}")
+                # print_rank_0(f"context_logits: {context_logits}")
                 
                 prediction_probs = F.softmax(context_logits[0], dim=0)
-                print_rank_0(f"prediction_probs length: {len(prediction_probs)}")
-                print_rank_0(f"prediction_probs: {prediction_probs}")
+                # print_rank_0(f"prediction_probs length: {len(prediction_probs)}")
+                # print_rank_0(f"prediction_probs: {prediction_probs}")
                 # print_rank_0(f"prediction_probs shape: {prediction_probs.shape}")
 
                 
                 # Get top token id 
                 top_pred_id = torch.argmax(context_logits, dim=-1).view(-1)
-                print_rank_0(f"top_pred_id: {top_pred_id}")
+                # print_rank_0(f"top_pred_id: {top_pred_id}")
                 top_pred_id = top_pred_id.cpu().numpy().tolist()
                 top_pred_ids.extend(top_pred_id)
                 # print_rank_0(f"top_pred_ids: {top_pred_ids}")
@@ -488,20 +490,22 @@ def generate_podcast_prediction(
                 # Extract the hidden states for each layer
                 layer_outputs =  model.layer_outputs.items()
                 # layer_outputs = [val[0].numpy() for key, val in model.layer_outputs.items()]
-                print_rank_0(f"print layer_outputs here")
-                print_rank_0(f"{type(layer_outputs)}")
-                print_rank_0(f"{len(layer_outputs)}")
+                # print_rank_0(f"print layer_outputs here")
+                # print_rank_0(f"{type(layer_outputs)}")
+                # print_rank_0(f"{len(layer_outputs)}")
                 for key, val in layer_outputs:
                     if key == 43:
-                        print_rank_0(f"print key")
-                        print_rank_0(f"{key}")
-                        print_rank_0(f"print value")
+                        # print_rank_0(f"print key")
+                        # print_rank_0(f"{key}")
+                        # print_rank_0(f"print val")
                         # print_rank_0(f"{val}")
-                        print_rank_0(f"{val[0].shape}")
-                        print_rank_0(f"print val[0][context_lengths-1,:,:].shape")
-                        print_rank_0(f"{val[0][context_lengths-1,:,:].shape}")
-                        embedding = val[0][context_lengths-1,:,:]
-                
+                        # print_rank_0(f"print val[0].shape")
+                        # print_rank_0(f"{val[0].shape}")
+                        embedding = val[0][context_lengths[0]-1,:,:].squeeze().numpy()
+                        print_rank_0(f"print embedding and length")
+                        print_rank_0(f"{len(embedding)}")
+                        print_rank_0(f"{embedding}")
+                        
                 embeddings.append(embedding)
                 
     
@@ -518,7 +522,7 @@ def generate_podcast_prediction(
         pred_dict['neox20B_embeddings']     = embeddings
         df = pd.DataFrame(pred_dict)
         
-        df.to_csv(file_name, index=0)
+        df.to_pickle(file_name)
         print_rank_0(f"JOB DONE. Save file " + file_name)
 
     return None
